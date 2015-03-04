@@ -31,10 +31,13 @@ import kafka.controller.{ControllerStats, KafkaController}
 import kafka.cluster.Broker
 import kafka.api.{ControlledShutdownResponse, ControlledShutdownRequest}
 import kafka.common.{ErrorMapping, InconsistentBrokerIdException, GenerateBrokerIdException}
-import kafka.network.{Receive, BlockingChannel, SocketServer}
 import kafka.metrics.KafkaMetricsGroup
 import com.yammer.metrics.core.Gauge
 import kafka.coordinator.ConsumerCoordinator
+import kafka.network.ssl.{SSLChannelFactory, SSLConnectionConfig, SSLAuth}
+import kafka.network._
+import scala.collection.{Map, mutable}
+
 
 /**
  * Represents the lifecycle of a single Kafka broker. Handles all functionality required
@@ -115,7 +118,7 @@ class KafkaServer(val config: KafkaConfig, time: Time = SystemTime) extends Logg
 
         socketServer = new SocketServer(config.brokerId,
           config.hostName,
-          config.port,
+          portsToChannelFactories,
           config.numNetworkThreads,
           config.queuedMaxRequests,
           config.socketSendBufferBytes,
@@ -172,6 +175,19 @@ class KafkaServer(val config: KafkaConfig, time: Time = SystemTime) extends Logg
         shutdown()
         throw e
     }
+  }
+
+  def portsToChannelFactories: Map[Int, ChannelFactory] = {
+    val portToChannelFactory = mutable.Map.empty[Int, ChannelFactory]
+    if (config.port > 0) {
+      portToChannelFactory += config.port -> new PlainSocketChannelFactory()
+    }
+    if (config.sslEnabled) {
+      val sslConfig = SSLConnectionConfig.server
+      SSLAuth.initialize(sslConfig)
+      portToChannelFactory += sslConfig.port -> new SSLChannelFactory(sslConfig.wantClientAuth, sslConfig.needClientAuth)
+    }
+    portToChannelFactory.toMap
   }
 
   private def initZk(): ZkClient = {
